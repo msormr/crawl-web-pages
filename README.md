@@ -16,8 +16,8 @@
 ## 文件结构
 
 ```
-├── config.yaml                 # 完整注释的示例配置（站点、层级、选择器、Gist）
-├── config-example.yaml         # 精简起步模板，新建站点配置从这里复制
+├── config.yaml                 # 实际运行的配置（示例站点已停用，正式站点在此维护）
+├── config-example.yaml         # 完整注释的示例配置（演示站点全部启用，供参考/复制）
 ├── crawler.py                  # 抓取脚本
 ├── requirements.txt            # Python 依赖
 ├── requirements-dev.txt        # 开发依赖（pytest）
@@ -50,7 +50,28 @@ GitHub → Settings → Developer settings → **Personal access tokens (classic
 
 首次运行会自动创建一个 secret Gist，其 URL 打印在运行日志里，ID 保存到 `gist_id.txt` 并自动提交回仓库；之后每次运行原地更新同一个 Gist。
 
-### 4. 本地调试（可选）
+### 4. 查看抓取结果（访问 Gist）
+
+抓取结果全部写在一个 secret Gist 里，每个站点一个文件（文件名 = 站点 `name` + 扩展名，见「站点 name 的作用与注意点」）。Gist 地址在首次运行后**永远不变**，之后每次定时运行原地更新同一批文件。
+
+**三种访问方式**
+
+| 方式 | 地址 | 适用场景 |
+|---|---|---|
+| 网页 | `https://gist.github.com/<用户名>/<gist_id>` | 人看，可切换历史版本 |
+| raw 直链 | `https://gist.githubusercontent.com/<用户名>/<gist_id>/raw/<文件名>` | 程序 / 客户端订阅（如订阅转换、代理客户端里填订阅 URL） |
+| API | `GET https://api.github.com/gists/<gist_id>` | 自动化处理（返回 JSON，`files` 字段含全部内容） |
+
+- raw 直链**去掉中间的版本号段**（`/raw/` 后直接跟文件名）即永远指向最新内容；带版本号的 raw 地址（`/raw/<commit-sha>/<文件名>`）固定指向某一次的历史版本。
+- secret Gist 知道链接就能访问（无需登录 GitHub），但不会被搜索引擎收录；想公开可在 Gist 页面 Edit → Make public。
+
+**地址在哪里找**
+
+1. 首次运行：Actions 运行日志里搜 `已创建新 Gist:`，后面就是 URL；脚本同时把 ID 写进 `gist_id.txt` 并自动提交回仓库。
+2. 之后想找回：任一次运行日志里搜 `已更新 Gist:`；或打开仓库根目录的 `gist_id.txt`，按 `https://gist.github.com/<你的用户名>/<ID>` 拼出地址；GitHub 主页头像 → **Your gists** 列表里也能看到。
+3. 最直接：登录 GitHub 账号后直接访问 <https://gist.github.com>，即可看到该账户下的所有 Gist，点击对应条目即可查看抓取结果；点进后地址栏 `https://gist.github.com/<用户名>/<gist_id>` 末段就是 **gist_id**，需要配置 `GIST_ID` Secret 或拼 raw 直链时可以直接从这里复制（`gist_id.txt` 里存的也是它）。
+
+### 5. 本地调试（可选）
 
 ```bash
 pip install -r requirements.txt
@@ -75,7 +96,7 @@ python crawler.py --dry-run             # 结果写入本地 output/ 目录，�
 
 | 字段 | 说明 |
 |---|---|
-| `name` | 站点标识（用作 Gist 文件名） |
+| `name` | 站点标识，**必填**；决定 Gist 输出文件名，详见下方「站点 name 的作用与注意点」 |
 | `title` | 输出 Markdown 的标题（可选） |
 | `enabled` | `false` 时跳过该站点 |
 | `start_url` / `start_urls` | 入口页（单个别名或列表） |
@@ -87,6 +108,15 @@ python crawler.py --dry-run             # 结果写入本地 output/ 目录，�
 | `output.separator` | txt 格式行内字段值的分隔符，默认 `" | "`，可设 `"\t"`（方便导入表格） |
 | `output.with_keys` | txt 格式行内是否带字段名，如 `author: Albert Einstein`（默认 `false`） |
 | `output.inherit_fields` | txt 格式是否把上层条目的字段拼进行内（默认 `true`，即列表页字段 + 详情页字段合成一行） |
+
+### 站点 name 的作用与注意点
+
+`name` 是每个站点的必填标识，决定该站点在 Gist 里的输出**文件名**：清洗后的 `name` + 扩展名（`.txt` / `.json` / `.md`，由 `output.format` 决定），同时也出现在运行日志和配置校验的错误信息里。注意：
+
+- **必填**：缺少 `name` 时启动校验直接报错，不会开始抓取。
+- **不能重复**：两个站点清洗后的 `name` 相同，输出文件名就相同，在同一个 Gist 里会互相覆盖（只留一个）。
+- **非法字符自动替换**：`\ / : * ? " < > |` 和空白会替换成 `-`，首尾 `-` 去掉；清洗后为空则兜底为 `site`。中文名保留，如 `name: 我的 站点/A` → 文件名 `我的-站点-A.txt`。
+- **改名 = 换文件**：`name` 一改，下次推送生成新文件，旧文件作为「不再对应任何启用站点的残留」被自动清理；如有外部链接/订阅引用旧文件名，需自行更新。
 
 ### 敏感信息（Cookie 等）
 
@@ -231,6 +261,7 @@ txt 格式的拍平规则：每个**最深层**的条目输出一行；该条目
 ## 常见问题
 
 - **Gist 是公开的吗？** 自动创建的是 secret Gist（搜索不到，但知道链接的人可以访问）。想完全公开可在 Gist 页面点 Edit → Make public。
+- **忘了 Gist 地址？** 见「快速开始 → 查看抓取结果」：运行日志搜 `已更新 Gist:`，或看仓库根目录的 `gist_id.txt`。
 - **定时任务不跑了？** GitHub 会在仓库 60 天无活动后自动暂停 schedule workflow，push 任意 commit 或手动跑一次即可恢复。
 - **站点改名/删除后 Gist 里的旧文件还在？** 推送时会自动清理：Gist 中属于爬虫输出（`.md`/`.txt`/`.json`）但不对应任何启用站点的文件会被删除；本次抓取失败的站点保留旧内容不动。
 - **Gist 被手动删除了？** 下次运行会自动重建新 Gist 并更新 `gist_id.txt`；若在 Secret 里指定了 `GIST_ID`，记得同步更新。

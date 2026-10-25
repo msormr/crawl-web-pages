@@ -55,6 +55,13 @@ timezone_offset: 8 # 输出内容里时间戳使用的时区偏移
 #   3) Gist 地址永远不变 —— 收藏首次运行日志里打印的 html_url 即可;
 #      程序/客户端订阅可用 raw 直链 (去掉中间的版本号段, 永远指向最新内容):
 #      https://gist.githubusercontent.com/<用户名>/<gist_id>/raw/mibei77.txt
+#   4) 忘了地址: Actions 任一次运行日志里搜 "已更新 Gist:" 即可找回,
+#      或看仓库根目录的 gist_id.txt; secret Gist 知道链接即可访问 (无需登录),
+#      但搜索引擎搜不到
+#   最直接: 登录 GitHub 账号后直接访问 https://gist.github.com,
+#      即可看到该账户下的所有 Gist, 点击对应条目即可查看抓取结果;
+#      点进后地址栏 https://gist.github.com/<用户名>/<gist_id> 末段就是 gist_id
+#      (gist_id.txt 里存的就是它), 需要拼 raw 直链或换仓库时可从这里复制
 # 前置: 仓库 Secret 里需配置 GIST_TOKEN (classic PAT, 勾选 gist 权限); GIST_ID 可选
 gist:
   id:
@@ -63,6 +70,11 @@ gist:
   description: "mibei77 节点订阅链接" # 仅在首次创建 Gist 时生效, 之后改它不会更新已有 Gist
 
 # ---------- 站点列表 (可配置任意多个) ----------
+# name: 每个站点的必填标识, 决定 Gist 输出文件名 (清洗后的 name + 扩展名, 扩展名由 output.format 决定):
+#   - 不能重复: 两个站点清洗后的 name 相同 -> 文件名相同, 同一个 Gist 里会互相覆盖
+#   - 非法字符 \/:*?"<>| 和空白替换为 "-", 首尾 "-" 去掉, 清洗后为空兜底为 "site"
+#   - 改名 = 换文件: 下次推送生成新文件, 旧文件作为残留被自动清理;
+#     依赖固定 raw 直链订阅的 (如 mibei77.txt), 改名会使旧直链失效, 慎改
 sites:
   # ======== 示例 1: 静态页面 + 两级抓取 (列表页 -> 作者详情页) ========
   # 以下三个示例站点仅作配置参考, 已停用 (不会抓取、不会写进 Gist);
