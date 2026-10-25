@@ -1,0 +1,6 @@
+__pycache__/
+output/
+.history/
+venv/
+.venv/
+# 注意: gist_id.txt 不要忽略, 它需要提交回仓库以复用 Gist

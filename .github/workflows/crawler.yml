@@ -1,0 +1,80 @@
+name: Multi-site Crawler
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # 每 6 小时运行一次 (UTC 时间), 按需修改
+  workflow_dispatch: # 支持在 Actions 页面手动触发
+
+permissions:
+  contents: write # 用于自动提交 gist_id.txt
+
+# 防止上一次运行未结束时重复启动
+concurrency:
+  group: crawler
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # 兜底: 配置失误导致抓取失控时强制结束 (按需调整)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest tests/ -q
+
+      - name: Detect dynamic rendering
+        id: dyn
+        run: |
+          # 用 Python 解析 YAML 判断是否需要浏览器 (grep 匹配对带引号等写法容易误判)
+          need=$(python -c "import yaml; cfg = yaml.safe_load(open('config.yaml', encoding='utf-8')) or {}; sites = [s for s in (cfg.get('sites') or []) if s.get('enabled', True)]; print('true' if any(r in ('auto', 'dynamic') for s in sites for r in [s.get('render') or 'auto'] + [(l.get('render') or s.get('render') or 'auto') for l in (s.get('levels') or [])]) else 'false')")
+          echo "need=$need" >> "$GITHUB_OUTPUT"
+
+      # 只在可能用到动态渲染时才安装浏览器 (约 150MB, 跳过可显著提速)
+      - name: Cache Playwright browsers
+        if: steps.dyn.outputs.need == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: playwright-${{ runner.os }}-
+
+      - name: Install Playwright Chromium
+        if: steps.dyn.outputs.need == 'true'
+        run: playwright install chromium --with-deps
+
+      - name: Run crawler
+        env:
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }} # 必需: classic PAT, 勾选 gist 权限
+          GIST_ID: ${{ secrets.GIST_ID }} # 可选: 指定已有 Gist
+        run: python crawler.py
+
+      # 首次运行自动创建 Gist 后, 把 gist_id.txt 提交回仓库, 之后运行即可复用
+      - name: Persist gist id
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -f gist_id.txt ]; then
+            git add gist_id.txt
+            if git diff --cached --quiet; then
+              echo "gist_id.txt 无变化, 跳过提交"
+            else
+              git commit -m "chore: persist gist id [skip ci]"
+              git push
+            fi
+          else
+            echo "gist_id.txt 不存在 (使用了 GIST_ID secret 或推送失败), 跳过提交"
+          fi
