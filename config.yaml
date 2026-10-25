@@ -49,18 +49,27 @@ retry: 2 # 瞬时失败(超时/5xx/429)的重试次数: 静态请求指数退避
 timezone_offset: 8 # 输出内容里时间戳使用的时区偏移
 
 # ---------- Gist 输出 ----------
+# 固定地址机制:
+#   1) 首次运行自动创建 Gist, ID 写入 gist_id.txt (workflow 会把它提交回仓库复用)
+#   2) 之后每次运行都按固定文件名 (站点名.txt, 如 mibei77.txt) 原地更新同一个 Gist
+#   3) Gist 地址永远不变 —— 收藏首次运行日志里打印的 html_url 即可;
+#      程序/客户端订阅可用 raw 直链 (去掉中间的版本号段, 永远指向最新内容):
+#      https://gist.githubusercontent.com/<用户名>/<gist_id>/raw/mibei77.txt
+# 前置: 仓库 Secret 里需配置 GIST_TOKEN (classic PAT, 勾选 gist 权限); GIST_ID 可选
 gist:
   id:
     "" # 留空: 首次运行会自动创建 Gist, 并把 ID 写入 gist_id.txt
     # 也可以在仓库 Secret 里配置 GIST_ID 指定已有 Gist (优先级更高)
-  description: "多站点抓取结果"
+  description: "mibei77 节点订阅链接" # 仅在首次创建 Gist 时生效, 之后改它不会更新已有 Gist
 
 # ---------- 站点列表 (可配置任意多个) ----------
 sites:
   # ======== 示例 1: 静态页面 + 两级抓取 (列表页 -> 作者详情页) ========
+  # 以下三个示例站点仅作配置参考, 已停用 (不会抓取、不会写进 Gist);
+  # 想重新启用改回 enabled: true 即可
   - name: quotes
     title: "经典语录·静态页示例"
-    enabled: true
+    enabled: false # 停用: 避免示例数据混进正式 Gist
     start_url: https://quotes.toscrape.com/
     # start_urls:            # 也支持多个入口页
     #   - https://quotes.toscrape.com/
@@ -99,7 +108,7 @@ sites:
   # 同一站点里两种渲染方式可以混用, 由 auto 逐页判断。
   - name: quotes-js
     title: "经典语录·动态页示例"
-    enabled: true
+    enabled: false # 停用: 避免示例数据混进正式 Gist
     start_url: https://quotes.toscrape.com/js/
     render: auto
     levels:
@@ -128,7 +137,7 @@ sites:
   # 直到没有新链接 (或达到 max_depth / max_pages)
   - name: quotes-crawl
     title: "经典语录·递归抓取示例"
-    enabled: true
+    enabled: false # 停用: 避免示例数据混进正式 Gist
     start_url: https://quotes.toscrape.com/
     render: auto
     crawl:
@@ -163,3 +172,74 @@ sites:
     output:
       format: txt
       separator: " | "
+
+  # ======== 示例 4: mibei77 —— 首页文章列表 -> 文章页订阅链接 (纯静态站) ========
+  # 页面结构 (2026-10-25 实测):
+  #   首页列表:  每篇文章标题为 <h2 class="item-heading"><a href="https://www.mibei77.com/776.html">标题</a></h2>
+  #   文章详情:  正文容器 <div class="theme-box wp-posts-content"> 内含两个订阅地址。
+  #              注意: 这两个地址是"纯文本 URL", 不是 <a> 超链接 (页面源码里是 <p>https://...</p>),
+  #              所以不能用 selector + attr: href 去取, 只能用正则从容器文本里抠出来:
+  #                v2ray 订阅:  https://aa.mibei77.com/202610/10.2564baghl.txt   (.txt 结尾)
+  #                clash 订阅:  https://aa.mibei77.com/202610/1025Clashiwr.yaml  (.yaml 结尾)
+  - name: mibei77
+    title: "mibei77 每日节点订阅链接"
+    enabled: true
+    # 入口: 首页。当前首页(含置顶)约 12 篇文章。
+    # 想多抓历史文章就改用 start_urls 把分页列进去 (分页地址为 /page/2 ~ /page/15, 无尾斜杠):
+    # start_urls:
+    #   - https://www.mibei77.com/
+    #   - https://www.mibei77.com/page/2
+    #   - https://www.mibei77.com/page/3
+    start_urls:
+      - https://www.mibei77.com/
+      - https://www.yudou789.top/
+    render: static # 实测无需 JS 渲染, 直接请求 HTML 即可 (比 auto 少一次校验, 更快更稳)
+    levels:
+      # ---- 第一级: 首页列表页, 每篇文章标题 (.item-heading 下的 a) 作为一个条目 ----
+      - name: home-list
+        item_selector: ".item-heading" # 每个标题块 <h2 class="item-heading"> 是一项
+        # limit: 10                     # 只抓前 N 篇; 不写 = 处理本页全部条目
+        fields:
+          # 文章链接: 取 <a> 的 href; href 会自动补全为绝对地址。
+          # link 只作为第二级的入口 (url_field), 不出现在最终输出里
+          link:
+            selector: "a" # 即 ".item-heading 下的 a 元素"
+            attr: "href" # -> https://www.mibei77.com/776.html
+          # 如需在输出里带上标题/文章链接, 加回 title 字段并把下面
+          # output 的 inherit_fields 改回 true (或不写, 默认 true)
+      # ---- 第二级: 文章详情页, 从正文容器里抠出两个订阅地址 ----
+      - name: post
+        url_field: link # 以上一级的 link 字段作为本层入口 (逐篇打开文章页)
+        fields:
+          # ⚠ 这里必须用链式 chain 写法, 不能用 selector + regex 简写:
+          #   selector + regex 在正则"不匹配"时会原样保留整段容器文本,
+          #   而 chain 写法无匹配时结果为空值 -> 输出时该字段被自动跳过。
+          #
+          # v2ray 订阅 (.txt 结尾)。链式分两步:
+          #   1) css:   选中正文容器, 取其全部可见文本 (纯文本 URL 也包含在内)
+          #   2) regex: 从文本中匹配 "http(s)://开头、.txt 结尾" 的那一段
+          #      \S+   = URL 中间不能有空白。容器文本以空格分隔段落文字,
+          #              恰好把 URL 和周围中文隔开, 所以 \S+ 能精确框住整个 URL
+          #      +?    = 非贪婪, 匹配到第一个 .txt 即停, 防止跨段吞字
+          #      正则步骤用单引号包裹, 避免 YAML 双引号字符串的反斜杠转义问题
+          # ⚠ 故意不设 default: 个别纯推广文没有订阅链接, 字段留空后
+          #   整行会被输出逻辑跳过, 不会产生垃圾行
+          txt_link:
+            chain:
+              - "css:.theme-box.wp-posts-content"
+              - 'regex:https?://\S+?\.txt'
+          # Clash 订阅 (.yaml 结尾), 提取逻辑同上
+          yaml_link:
+            chain:
+              - "css:.theme-box.wp-posts-content"
+              - 'regex:https?://\S+?\.yaml'
+          # 备注: 若以后出现 .text 结尾的地址, 把正则改成 'regex:https?://\S+?\.(?:txt|text)'
+    output:
+      format: txt
+      # 字段之间用换行分隔 -> 每个链接独占一行, 不用 " | " 之类的连接符
+      separator: "\n"
+      inherit_fields: false # 不拼接第一级字段: 输出里只有订阅链接本身
+      # 最终输出形态 (每篇文章贡献 2 行):
+      #   https://aa.mibei77.com/202610/…txt
+      #   https://aa.mibei77.com/202610/…yaml
+      # with_keys: true                      # 想要行内带字段名 (txt_link: …) 时打开

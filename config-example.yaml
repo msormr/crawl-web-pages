@@ -1,60 +1,165 @@
 # ============================================================
-# 精简起步模板 —— 新站点配置从这里复制。
-# 完整注释的示例见 config.yaml, 字段详解见 README.md
+# 多站点多级页面抓取配置
+#
+# 抓取模式 (每个站点二选一):
+#   A. levels: 预设层级的多级抓取 (见下方概念说明)
+#   B. crawl:  递归抓取 —— 不知道页面有多少级时使用。
+#      沿 links 选出的链接自动深入, 每访问一页都提取 targets,
+#      直到没有新链接或达到 max_depth/max_pages 上限。
+#
+# 链式抽取 (CSS / XPath / 正则 串联, levels 和 crawl 的字段都可用):
+#   简写:  title: "h1"                        -> 等价于 CSS 单步
+#   单步:  title: "xpath://h1/a"  /  "regex:\\d+"
+#   多步:  title:                              -> 逐步执行, 前一步结果是后一步的上下文
+#     - "css:.content"                         # CSS 选中节点
+#     - "xpath:./p[1]"                         # XPath 在上一步节点内选取 (.// 表示当前节点内)
+#     - "regex:^([^.]+\\.)"                    # 正则对文本提取; 有分组取第 1 组
+#   注意: regex 步骤之后不能再接 css/xpath; 步骤详解见 README
+#
+# 核心概念:
+#   render: auto    -> 自动判断(默认): 先按静态抓取, 用选择器校验内容是否已存在,
+#                      拿不到就自动切换 Playwright 动态渲染 (每个页面单独判断)
+#          static  -> 强制直接请求 HTML (快, 适合确定的静态页面)
+#          dynamic -> 强制 Playwright 渲染 (适合确定的 JS 渲染页面)
+#   levels: 抓取层级, 从上到下逐层深入
+#     - item_selector: 本层"每一项"的 CSS 选择器 (不写 = 整页作为一项)
+#     - fields:        从每一项提取的字段
+#         简写:  字段名: "css选择器"                        -> 取文本
+#         详写:  字段名:
+#                 selector: ".title"     CSS 选择器
+#                 attr: "href"           取属性而非文本; href/src 自动补全为绝对链接
+#                 html: true            保留内部 HTML (主要给 json 输出用)
+#                 all: true             匹配所有元素并合并 (默认只取第一个)
+#                 regex: "..."          用正则从值中再提取 (配合 regex_group)
+#                 max_length: 200       截断过长文本
+#                 default: "-"          未匹配时的默认值
+#     - url_field:     【写在下一层】指定上一层的哪个字段作为本层的入口链接
+#     - limit:         本层最多处理多少项 (防止抓取过量)
+#     - wait_for:      (动态模式) 等待该选择器的元素出现后再提取
+#     - settle:        (动态模式) 再额外等待的秒数, 给延迟加载的内容留时间
+#     - render:        也可以写在某一层, 覆盖站点级设置 (如列表页静态、详情页动态)
+#
+# 运行: 由 .github/workflows/crawler.yml 定时触发, 结果写入 Gist
 # ============================================================
 
 # ---------- 全局设置 ----------
-delay: 1.0        # 相邻两次请求的间隔秒数 (建议不小于 1)
-timeout: 120      # 单个请求超时 (秒)
-retry: 2          # 瞬时失败(超时/5xx/429)的重试次数
-timezone_offset: 8
+delay: 1.0 # 相邻两次请求的间隔秒数 (对目标站点友好, 建议不要小于 1)
+timeout: 120 # 单个请求超时 (秒)
+retry: 2 # 瞬时失败(超时/5xx/429)的重试次数: 静态请求指数退避, 动态渲染加载失败同样重试
+timezone_offset: 8 # 输出内容里时间戳使用的时区偏移
 
 # ---------- Gist 输出 ----------
 gist:
-  id: ""          # 留空: 首次运行自动创建, ID 写入 gist_id.txt
+  id:
+    "" # 留空: 首次运行会自动创建 Gist, 并把 ID 写入 gist_id.txt
+    # 也可以在仓库 Secret 里配置 GIST_ID 指定已有 Gist (优先级更高)
   description: "多站点抓取结果"
 
-# ---------- 站点列表 ----------
+# ---------- 站点列表 (可配置任意多个) ----------
 sites:
-  # 模式 A: levels 多级抓取 (列表页 -> 详情页)
-  - name: my-site
-    title: "示例站点"
+  # ======== 示例 1: 静态页面 + 两级抓取 (列表页 -> 作者详情页) ========
+  - name: quotes
+    title: "经典语录·静态页示例"
     enabled: true
-    start_url: https://example.com/
-    render: auto   # auto: 静态抓不到目标内容时自动切 Playwright 动态渲染
-    # headers:     # Cookie 等敏感值用 ${环境变量} 注入, 配置为仓库 Secret
-    #   Cookie: "${MY_COOKIE}"
+    start_url: https://quotes.toscrape.com/
+    # start_urls:            # 也支持多个入口页
+    #   - https://quotes.toscrape.com/
+    #   - https://quotes.toscrape.com/page/2/
+    render: auto # 自动判断: 本站静态即可, 不会启用浏览器
+    # headers:               # 需要自定义请求头时打开 (如 Cookie)
+    #   Cookie: "${QUOTES_COOKIE}" # 敏感值用 ${环境变量} 注入, 不要写死在仓库里
     levels:
-      - name: list
-        item_selector: ".item"
-        limit: 20
+      - name: list # 第一级: 列表页
+        item_selector: ".quote" # 每条语录是一个 .quote
+        limit: 5 # 只处理前 5 条
         fields:
-          title: "h3 a"
+          quote: ".text" # 简写: 取文本
+          author: ".author"
           link:
-            selector: "a"
+            selector: "a" # 详写: 取 href 属性, 自动补全为绝对链接
             attr: "href"
-      - name: detail
-        url_field: link
+      - name: detail # 第二级: 作者详情页
+        url_field: link # 以上一层的 link 字段作为本层入口
         fields:
-          content:
-            selector: ".content"
-            max_length: 500
+          name: "h3.author-title"
+          born: ".author-born-date"
+          about:
+            selector: ".author-description"
+            max_length: 120 # 过长的文本截断
+    output:
+      # format: txt -> 每条记录输出为一行 (推荐用于纯文本归档)
+      #          markdown | json 也仍可选用
+      format: txt
+      separator: " | " # 行内字段值的分隔符, 也可用 "\t" (方便导入表格)
+      # with_keys: true      # 行内带字段名, 如 "author: Albert Einstein"
+      # inherit_fields: false # 不把上层字段拼进行内, 只保留最深层字段
+
+  # ======== 示例 2: 自动判断渲染方式 + 两级抓取 ========
+  # 该站第 1 级页面本身含分页链接(静态可取), 第 2 级页面由 JS 渲染(自动回退动态)。
+  # 同一站点里两种渲染方式可以混用, 由 auto 逐页判断。
+  - name: quotes-js
+    title: "经典语录·动态页示例"
+    enabled: true
+    start_url: https://quotes.toscrape.com/js/
+    render: auto
+    levels:
+      - name: first-page # 第一级: 整页作为一项
+        fields:
+          next_page:
+            selector: "li.next a"
+            attr: "href" # -> https://quotes.toscrape.com/js/page/2/
+      - name: second-page # 第二级: 跟随上一层的 next_page 链接
+        url_field: next_page
+        item_selector: ".quote" # 静态抓取发现没有 .quote, 会自动切动态渲染
+        settle: 1.0 # 切动态后额外等 1 秒
+        fields:
+          quote: ".text"
+          author: ".author"
+          tags:
+            selector: ".tag" # 一条语录有多个标签
+            all: true # 全部提取并合并
+    output:
+      format: txt # 该站点也输出 txt, 演示带字段名 + 不继承上层字段
+      with_keys: true
+      inherit_fields: false # 上一层的 next_page 链接不拼进每行
+
+  # ======== 示例 3: 递归抓取 (未知层级) + CSS/XPath/正则链式抽取 ========
+  # 不知道一共有多少页: 沿"下一页"链接自动深入, 每页提取所有语录,
+  # 直到没有新链接 (或达到 max_depth / max_pages)
+  - name: quotes-crawl
+    title: "经典语录·递归抓取示例"
+    enabled: true
+    start_url: https://quotes.toscrape.com/
+    render: auto
+    crawl:
+      # 每一页: 从这些链接继续深入 (链式选择器, 默认取 href 并转为绝对链接)
+      links: "css:ul.pager a"
+      # allow:                        # 可选: 只跟随匹配任一正则的链接
+      #   - "^https://quotes\\.toscrape\\.com/page/\\d+/"
+      deny: # 可选: 排除匹配的链接 (/page/1/ 与首页同页, 去重)
+        - "/page/1/"
+      same_host: true # 默认只跟随同域名链接
+      max_depth: 10 # 从入口最多深入几层链接
+      max_pages: 15 # 最多访问多少页 (防爆)
+      # max_items: 100               # 最多提取多少条记录
+      # include_page_url: true       # 每条记录加上 _page 字段 (来源页面)
+      targets:
+        item: "css:.quote" # 目标节点: 每个匹配项作为一条记录 (不写=整页一条)
+        fields: # 字段全部支持链式抽取
+          quote:
+            chain: # 多步链: CSS 选中 -> 正则去掉首尾中文引号
+              - "css:.text"
+              - "regex:^“(.+)”$"
+          author:
+            chain: "xpath:.//small[@class='author']/text()" # XPath 直接取文本
+          tags:
+            chain: "css:.tag"
+            all: true # 合并所有匹配
+          author_id:
+            chain:
+              - "css:a[href*='/author/']" # CSS 选中作者链接 <a>
+              - "xpath:./@href" # XPath 取 href 属性值
+              - "regex:/author/(.+)$" # 正则截取作者 ID
     output:
       format: txt
       separator: " | "
-
-  # 模式 B: 递归抓取 (未知层级, 与 levels 二选一)
-  # - name: my-crawl
-  #   start_url: https://example.com/docs/
-  #   render: auto
-  #   crawl:
-  #     links: "css:.sidebar a"   # 沿这些链接深入
-  #     allow: ["^https://example\\.com/docs/"]
-  #     max_depth: 5
-  #     max_pages: 50
-  #     targets:
-  #       item: "css:div.doc"
-  #       fields:
-  #         title: "h1"
-  #   output:
-  #     format: txt
